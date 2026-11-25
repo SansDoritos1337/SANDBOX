@@ -18,12 +18,13 @@ var reset_was_down := false
 func _ready() -> void:
 	_build_world()
 	_build_ground()
+	_build_grass()
 	_build_terrain()
 	_build_track()
 	_build_ball()
 	_build_camera()
 	_build_hud()
-	_show_message("MEGA KULKA — sprawdź teren i rampy!")
+	_show_message("REALISTYCZNA TRAWA — sprawdź teren i rampy!")
 
 func _process(delta: float) -> void:
 	if ball == null:
@@ -72,38 +73,38 @@ func _build_world() -> void:
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var sky_material := ProceduralSkyMaterial.new()
-	sky_material.sky_top_color = Color("#083d70")
-	sky_material.sky_horizon_color = Color("#5ea4d6")
-	sky_material.ground_bottom_color = Color("#10182d")
-	sky_material.ground_horizon_color = Color("#26406b")
-	sky_material.sun_angle_max = 42.0
+	sky_material.sky_top_color = Color("#5d9bd3")
+	sky_material.sky_horizon_color = Color("#d4e5d6")
+	sky_material.ground_bottom_color = Color("#4d6651")
+	sky_material.ground_horizon_color = Color("#9ab49a")
+	sky_material.sun_angle_max = 38.0
 	sky.sky_material = sky_material
 	env.sky = sky
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_exposure = 1.16
-	env.tonemap_white = 7.0
+	env.tonemap_mode = Environment.TONE_MAPPER_ACES
+	env.tonemap_exposure = 1.12
+	env.tonemap_white = 6.0
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_color = Color("#88c4ff")
-	env.ambient_light_energy = 0.7
+	env.ambient_light_color = Color("#b9d2a9")
+	env.ambient_light_energy = 0.75
 	env.volumetric_fog_enabled = true
-	env.volumetric_fog_density = 0.012
+	env.volumetric_fog_density = 0.008
 	env.volumetric_fog_detail_spread = 0.8
 	env.ssao_enabled = true
 	env.ssao_radius = 1.7
 	env.ssao_intensity = 2.3
 	env.glow_enabled = true
-	env.glow_intensity = 0.8
-	env.glow_bloom = 0.12
+	env.glow_intensity = 0.5
+	env.glow_bloom = 0.08
 	env.adjustment_enabled = true
-	env.adjustment_contrast = 1.08
-	env.adjustment_saturation = 1.22
+	env.adjustment_contrast = 1.05
+	env.adjustment_saturation = 1.12
 	world_environment.environment = env
 	add_child(world_environment)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-48.0, -38.0, 0.0)
-	sun.light_color = Color("#fff4da")
-	sun.light_energy = 3.2
+	sun.rotation_degrees = Vector3(-46.0, -38.0, 0.0)
+	sun.light_color = Color("#fff2cb")
+	sun.light_energy = 3.4
 	sun.shadow_enabled = true
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 95.0
@@ -115,20 +116,12 @@ func _build_world() -> void:
 	sun.directional_shadow_pancake_size = 20.0
 	add_child(sun)
 
-	var fill := OmniLight3D.new()
-	fill.position = Vector3(0.0, 18.0, 12.0)
-	fill.light_color = Color("#6caeff")
-	fill.light_energy = 42.0
-	fill.omni_range = 42.0
-	fill.omni_attenuation = 1.3
-	add_child(fill)
-
 func _build_ground() -> void:
-	var ground_material := StandardMaterial3D.new()
-	ground_material.albedo_color = Color("#233b28")
-	ground_material.roughness = 0.82
-	ground_material.metallic = 0.02
-	_add_box("Główna ziemia", Vector3(0.0, -1.0, 0.0), Vector3(70.0, 2.0, 70.0), ground_material)
+	var soil_material := StandardMaterial3D.new()
+	soil_material.albedo_color = Color("#36552a")
+	soil_material.roughness = 0.96
+	soil_material.metallic = 0.0
+	_add_box("Ziemia pod trawą", Vector3(0.0, -1.0, 0.0), Vector3(70.0, 2.0, 70.0), soil_material)
 
 	var rock_material := StandardMaterial3D.new()
 	rock_material.albedo_color = Color("#6a756e")
@@ -140,6 +133,43 @@ func _build_ground() -> void:
 			continue
 		var size := randf_range(1.0, 4.0)
 		_add_visual_sphere(Vector3(random_x, randf_range(-0.2, 0.9), random_z), size, rock_material)
+
+func _build_grass() -> void:
+	# Proceduralna trawa: setki lekko wygiętych źdźbeł z naturalną różnicą koloru.
+	var grass_material_green := StandardMaterial3D.new()
+	grass_material_green.albedo_color = Color("#347a32")
+	grass_material_green.roughness = 0.82
+	grass_material_green.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var grass_material_light := StandardMaterial3D.new()
+	grass_material_light.albedo_color = Color("#70a84e")
+	grass_material_light.roughness = 0.78
+	grass_material_light.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var grass_material_dark := StandardMaterial3D.new()
+	grass_material_dark.albedo_color = Color("#1d5728")
+	grass_material_dark.roughness = 0.86
+	grass_material_dark.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	for z in range(-30, 31, 2):
+		for x in range(-30, 31, 2):
+			if absf(x) < 17.0 and absf(z) < 17.0:
+				continue
+			var random_variation := randf()
+			var grass_material := grass_material_green
+			if random_variation < 0.28:
+				grass_material = grass_material_light
+			elif random_variation > 0.72:
+				grass_material = grass_material_dark
+
+			for blade in range(3):
+				var blade_mesh := MeshInstance3D.new()
+				var blade_shape := BoxMesh.new()
+				var height := randf_range(0.42, 1.05)
+				blade_shape.size = Vector3(randf_range(0.025, 0.055), height, randf_range(0.035, 0.07))
+				blade_mesh.mesh = blade_shape
+				blade_mesh.material_override = grass_material
+				blade_mesh.position = Vector3(float(x) + randf_range(-0.7, 0.7), height * 0.5, float(z) + randf_range(-0.7, 0.7))
+				blade_mesh.rotation_degrees = Vector3(randf_range(-18.0, 18.0), randf_range(0.0, 360.0), randf_range(-12.0, 12.0))
+				add_child(blade_mesh)
 
 func _build_terrain() -> void:
 	var mountain_material := _material(Color("#55676a"), 0.94, 0.05)
@@ -176,19 +206,15 @@ func _build_track() -> void:
 	var track_material := _material(Color("#193659"), 0.28, 0.5)
 	var neon_material := _material(Color("#3fe9ff"), 0.15, 0.3, Color("#09c9ff") * 2.0)
 	_add_box("Arena", Vector3.ZERO, Vector3(32.0, 1.0, 32.0), track_material)
-
 	for i in range(-14, 15, 2):
 		_add_visual_box(Vector3(float(i), 0.52, 0.0), Vector3(0.035, 0.025, 31.0), neon_material)
 		_add_visual_box(Vector3(0.0, 0.52, float(i)), Vector3(31.0, 0.025, 0.035), neon_material)
-
 	_add_box("Bariera północ", Vector3(0.0, 1.5, -16.0), Vector3(32.0, 3.0, 0.8), track_material)
 	_add_box("Bariera południe", Vector3(0.0, 1.5, 16.0), Vector3(32.0, 3.0, 0.8), track_material)
 	_add_box("Bariera zachód", Vector3(-16.0, 1.5, 0.0), Vector3(0.8, 3.0, 32.0), track_material)
 	_add_box("Bariera wschód", Vector3(16.0, 1.5, 0.0), Vector3(0.8, 3.0, 32.0), track_material)
-
 	_add_box("Mega rampa A", Vector3(-9.0, 1.0, -7.0), Vector3(8.0, 1.0, 6.0), neon_material, Vector3(0.0, 0.0, -0.28))
 	_add_box("Mega rampa B", Vector3(9.0, 1.0, 7.0), Vector3(8.0, 1.0, 6.0), neon_material, Vector3(0.0, 0.0, 0.28))
-
 	var positions := [Vector3(-6, 0.8, -2), Vector3(6, 0.8, 2), Vector3(0, 0.8, 6), Vector3(-3, 0.8, 11), Vector3(10, 0.8, -9), Vector3(-10, 0.8, 8)]
 	for index in positions.size():
 		var center: Vector3 = positions[index]
@@ -211,7 +237,6 @@ func _build_track() -> void:
 		collider.shape = shape
 		bumper.add_child(collider)
 		add_child(bumper)
-
 		var area := Area3D.new()
 		area.position = center
 		var area_shape := SphereShape3D.new()
