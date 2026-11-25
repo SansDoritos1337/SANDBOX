@@ -1,13 +1,18 @@
-# Kulka 3D — Ultra Physics
+# Kulka Sandbox 3D
 
-Mocny, fizyczny plac zabaw z jedną kulką w Godot 4:
-- duża terenowa mapa z górami i tunelem ramp
-- Forward+, SSAO, Włókna HDR i kompletne cienie
-- cieniowalne bumpery i neonowe światła
-- mocniejsze fizyki, dopalacze i skoki
+Minimalistyczny sandbox fizyczny w Godot 4: jedna duża, błyszcząca kulka i otwarta ziemia — bez misji, przeszkód ani punktacji.
 
 ## Sterowanie
 
-**WASD / strzałki** — ruch  •  **Spacja** — skok  •  **Shift** — dopalacz  •  **R** — reset
+- **LPM na kulce + przeciąganie** — złap kulkę; puść przycisk, aby nadać jej pęd
+- **PPM** — mocne popchnięcie w stronę kursora
+- **R** — zresetuj pozycję
 
-Otwórz `project.godot` w Godot 4.3+ i uruchom projekt.
+## Efekty i fizyka
+
+- bliska, płynnie podążająca kamera
+- fizyczna kula z odbiciem, tarciem i ciągłym wykrywaniem kolizji
+- proceduralny shader ziemi z wariacją kolorów i detalem przypominającym trawę
+- cienie, SSAO, bloom, metaliczny materiał kulki, świetlny ślad i iskry przy uderzeniach
+
+Otwórz `project.godot` w Godot 4.3+ i uruchom scenę. Wydajność zależy od sprzętu i ustawień sterownika; efekty graficzne mogą zmniejszyć liczbę FPS.

@@ -1,377 +1,311 @@
 extends Node3D
 
-const BALL_RADIUS := 0.72
-const WORLD_LIMIT := 24.0
-const DRIVE_FORCE := 54.0
+## Minimalny sandbox fizyczny: jedna kulka, płaska ziemia i sterowanie myszą.
+const BALL_RADIUS := 0.8
+const ARENA_LIMIT := 90.0
+const DRAG_STRENGTH := 34.0
+const DRAG_DAMPING := 9.0
+const MAX_DRAG_FORCE := 180.0
 
 var ball: RigidBody3D
 var camera: Camera3D
-var score_label: Label
-var message_label: Label
-var boost_cooldown := 0.0
-var message_time := 0.0
-var score := 0
-var jump_was_down := false
-var boost_was_down := false
-var reset_was_down := false
+var drag_target: Vector3 = Vector3.ZERO
+var drag_target_velocity: Vector3 = Vector3.ZERO
+var dragging := false
+var impact_particles: GPUParticles3D
+var status_label: Label
+var last_impact_time := -10.0
+var elapsed := 0.0
 
 func _ready() -> void:
 	_build_world()
 	_build_ground()
-	_build_grass()
-	_build_terrain()
-	_build_track()
 	_build_ball()
 	_build_camera()
+	_build_effects()
 	_build_hud()
-	_show_message("REALISTYCZNA TRAWA — sprawdź teren i rampy!")
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _process(delta: float) -> void:
+	elapsed += delta
 	if ball == null:
 		return
-	var target := ball.global_position + Vector3(0.0, 12.0, 17.0)
-	camera.global_position = camera.global_position.lerp(target, minf(delta * 5.0, 1.0))
-	camera.look_at(ball.global_position + Vector3.UP * 0.4, Vector3.UP)
-	if message_time > 0.0:
-		message_time -= delta
-		if message_time <= 0.0:
-			message_label.visible = false
-	_update_hud()
+	# Kamera zostaje blisko kulki, aby fizyczne detale były dobrze widoczne.
+	var camera_target := ball.global_position + Vector3(0.0, 4.2, 8.2)
+	camera.global_position = camera.global_position.lerp(camera_target, minf(delta * 7.0, 1.0))
+	camera.look_at(ball.global_position, Vector3.UP)
+	if dragging:
+		status_label.text = "PRZECIĄGASZ KULKĘ  •  puść LPM, żeby ją wystrzelić"
+	else:
+		status_label.text = "LPM: złap i przeciągnij   •   PPM: popchnij   •   R: reset"
 
-func _physics_process(delta: float) -> void:
-	boost_cooldown = maxf(boost_cooldown - delta, 0.0)
-	var drive := Vector3.ZERO
-	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP): drive.z -= 1.0
-	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN): drive.z += 1.0
-	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT): drive.x -= 1.0
-	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): drive.x += 1.0
-	if drive != Vector3.ZERO:
-		ball.apply_force(drive.normalized() * DRIVE_FORCE, Vector3.DOWN * (BALL_RADIUS * 0.8))
-
-	var jump_down := Input.is_key_pressed(KEY_SPACE)
-	if jump_down and not jump_was_down and ball.get_contact_count() > 0:
-		ball.apply_central_impulse(Vector3.UP * 12.0)
-	jump_was_down = jump_down
-
-	var boost_down := Input.is_key_pressed(KEY_SHIFT)
-	if boost_down and not boost_was_down and boost_cooldown == 0.0:
-		var direction := drive.normalized() if drive != Vector3.ZERO else Vector3.BACK
-		ball.apply_central_impulse(direction * 14.0 + Vector3.UP * 3.0)
-		boost_cooldown = 0.75
-	boost_was_down = boost_down
-
-	var reset_down := Input.is_key_pressed(KEY_R)
-	if reset_down and not reset_was_down:
+func _physics_process(_delta: float) -> void:
+	if ball == null:
+		return
+	if dragging:
+		var next_target := _mouse_ground_position()
+		if next_target != Vector3.INF:
+			drag_target_velocity = (next_target - drag_target) / maxf(get_physics_process_delta_time(), 0.001)
+			drag_target = next_target
+			var error := drag_target - ball.global_position
+			var force := error * DRAG_STRENGTH - ball.linear_velocity * DRAG_DAMPING
+			ball.apply_central_force(force.limit_length(MAX_DRAG_FORCE))
+	if ball.global_position.y < -15.0:
 		_reset_ball()
-	reset_was_down = reset_down
-	if ball.global_position.y < -18.0:
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if _mouse_hits_ball(event.position):
+				dragging = true
+				drag_target = ball.global_position
+				drag_target_velocity = Vector3.ZERO
+				ball.sleeping = false
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			var shove := _mouse_ground_position()
+			if shove != Vector3.INF:
+				var direction := (ball.global_position - shove).normalized()
+				if direction.length_squared() < 0.01:
+					direction = Vector3(0.0, 0.45, -1.0).normalized()
+				ball.apply_central_impulse(direction * 12.0 + Vector3.UP * 3.0)
+	elif event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if dragging:
+			dragging = false
+			ball.linear_velocity += drag_target_velocity.limit_length(22.0) * 0.65
+	elif event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_R:
 		_reset_ball()
+
+func _mouse_hits_ball(screen_position: Vector2) -> bool:
+	var ray_origin := camera.project_ray_origin(screen_position)
+	var ray_end := ray_origin + camera.project_ray_normal(screen_position) * 200.0
+	var query := PhysicsRayQueryParameters3D.create(ray_origin, ray_end)
+	query.collide_with_areas = false
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	return not hit.is_empty() and hit.get("collider") == ball
+
+func _mouse_ground_position() -> Vector3:
+	var mouse_position := get_viewport().get_mouse_position()
+	var ray_origin := camera.project_ray_origin(mouse_position)
+	var ray_direction := camera.project_ray_normal(mouse_position)
+	var ground_plane := Plane(Vector3.UP, 0.0)
+	var intersection: Variant = ground_plane.intersects_ray(ray_origin, ray_direction)
+	if intersection == null:
+		return Vector3.INF
+	var point: Vector3 = intersection
+	point.x = clampf(point.x, -ARENA_LIMIT, ARENA_LIMIT)
+	point.z = clampf(point.z, -ARENA_LIMIT, ARENA_LIMIT)
+	point.y = BALL_RADIUS
+	return point
 
 func _build_world() -> void:
 	var world_environment := WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
+	var environment := Environment.new()
+	environment.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var sky_material := ProceduralSkyMaterial.new()
-	sky_material.sky_top_color = Color("#5d9bd3")
-	sky_material.sky_horizon_color = Color("#d4e5d6")
-	sky_material.ground_bottom_color = Color("#4d6651")
-	sky_material.ground_horizon_color = Color("#9ab49a")
-	sky_material.sun_angle_max = 38.0
+	sky_material.sky_top_color = Color("#071427")
+	sky_material.sky_horizon_color = Color("#263c59")
+	sky_material.ground_bottom_color = Color("#111b29")
+	sky_material.ground_horizon_color = Color("#263c59")
 	sky.sky_material = sky_material
-	env.sky = sky
-	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 1.12
-	env.tonemap_white = 6.0
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_color = Color("#b9d2a9")
-	env.ambient_light_energy = 0.75
-	env.volumetric_fog_enabled = true
-	env.volumetric_fog_density = 0.008
-	env.volumetric_fog_detail_spread = 0.8
-	env.ssao_enabled = true
-	env.ssao_radius = 1.7
-	env.ssao_intensity = 2.3
-	env.glow_enabled = true
-	env.glow_intensity = 0.5
-	env.glow_bloom = 0.08
-	env.adjustment_enabled = true
-	env.adjustment_contrast = 1.05
-	env.adjustment_saturation = 1.12
-	world_environment.environment = env
+	environment.sky = sky
+	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	environment.ambient_light_color = Color("#8ca9d0")
+	environment.ambient_light_energy = 0.55
+	environment.ssao_enabled = true
+	environment.ssao_radius = 1.2
+	environment.ssao_intensity = 1.6
+	environment.glow_enabled = true
+	environment.glow_intensity = 0.7
+	environment.glow_bloom = 0.14
+	world_environment.environment = environment
 	add_child(world_environment)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-46.0, -38.0, 0.0)
-	sun.light_color = Color("#fff2cb")
-	sun.light_energy = 3.4
+	sun.rotation_degrees = Vector3(-48.0, -32.0, 0.0)
+	sun.light_color = Color("#d9e8ff")
+	sun.light_energy = 1.8
 	sun.shadow_enabled = true
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	sun.directional_shadow_max_distance = 95.0
-	sun.directional_shadow_split_1 = 0.12
-	sun.directional_shadow_split_2 = 0.26
-	sun.directional_shadow_split_3 = 0.45
-	sun.directional_shadow_fade_start = 0.75
-	sun.directional_shadow_blend_splits = true
-	sun.directional_shadow_pancake_size = 20.0
+	sun.directional_shadow_max_distance = 55.0
 	add_child(sun)
 
+	var rim_light := OmniLight3D.new()
+	rim_light.position = Vector3(-3.0, 4.0, -3.0)
+	rim_light.light_color = Color("#22bfff")
+	rim_light.light_energy = 8.0
+	rim_light.omni_range = 12.0
+	add_child(rim_light)
+
 func _build_ground() -> void:
-	var soil_material := StandardMaterial3D.new()
-	soil_material.albedo_color = Color("#36552a")
-	soil_material.roughness = 0.96
-	soil_material.metallic = 0.0
-	_add_box("Ziemia pod trawą", Vector3(0.0, -1.0, 0.0), Vector3(70.0, 2.0, 70.0), soil_material)
+	var ground := StaticBody3D.new()
+	ground.name = "Ziemia"
+	var plane_mesh := PlaneMesh.new()
+	plane_mesh.size = Vector2(220.0, 220.0)
+	var visual := MeshInstance3D.new()
+	visual.mesh = plane_mesh
+	visual.material_override = _make_ground_material()
+	visual.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ground.add_child(visual)
+	var collision := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(220.0, 0.5, 220.0)
+	collision.shape = shape
+	collision.position.y = -0.25
+	ground.add_child(collision)
+	add_child(ground)
 
-	var rock_material := StandardMaterial3D.new()
-	rock_material.albedo_color = Color("#6a756e")
-	rock_material.roughness = 0.96
-	for i in range(80):
-		var random_x := randf_range(-29.0, 29.0)
-		var random_z := randf_range(-29.0, 29.0)
-		if absf(random_x) < 18.0 and absf(random_z) < 18.0:
-			continue
-		var size := randf_range(1.0, 4.0)
-		_add_visual_sphere(Vector3(random_x, randf_range(-0.2, 0.9), random_z), size, rock_material)
-
-func _build_grass() -> void:
-	# Proceduralna trawa: setki lekko wygiętych źdźbeł z naturalną różnicą koloru.
-	var grass_material_green := StandardMaterial3D.new()
-	grass_material_green.albedo_color = Color("#347a32")
-	grass_material_green.roughness = 0.82
-	grass_material_green.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var grass_material_light := StandardMaterial3D.new()
-	grass_material_light.albedo_color = Color("#70a84e")
-	grass_material_light.roughness = 0.78
-	grass_material_light.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var grass_material_dark := StandardMaterial3D.new()
-	grass_material_dark.albedo_color = Color("#1d5728")
-	grass_material_dark.roughness = 0.86
-	grass_material_dark.cull_mode = BaseMaterial3D.CULL_DISABLED
-
-	for z in range(-30, 31, 2):
-		for x in range(-30, 31, 2):
-			if absf(x) < 17.0 and absf(z) < 17.0:
-				continue
-			var random_variation := randf()
-			var grass_material := grass_material_green
-			if random_variation < 0.28:
-				grass_material = grass_material_light
-			elif random_variation > 0.72:
-				grass_material = grass_material_dark
-
-			for blade in range(3):
-				var blade_mesh := MeshInstance3D.new()
-				var blade_shape := BoxMesh.new()
-				var height := randf_range(0.42, 1.05)
-				blade_shape.size = Vector3(randf_range(0.025, 0.055), height, randf_range(0.035, 0.07))
-				blade_mesh.mesh = blade_shape
-				blade_mesh.material_override = grass_material
-				blade_mesh.position = Vector3(float(x) + randf_range(-0.7, 0.7), height * 0.5, float(z) + randf_range(-0.7, 0.7))
-				blade_mesh.rotation_degrees = Vector3(randf_range(-18.0, 18.0), randf_range(0.0, 360.0), randf_range(-12.0, 12.0))
-				add_child(blade_mesh)
-
-func _build_terrain() -> void:
-	var mountain_material := _material(Color("#55676a"), 0.94, 0.05)
-	var snow_material := _material(Color("#dcecf0"), 0.75, 0.02)
-	var mountain_positions := [
-		Vector3(-34.0, 5.0, -30.0), Vector3(34.0, 7.0, -32.0),
-		Vector3(-38.0, 10.0, 22.0), Vector3(38.0, 9.0, 24.0),
-		Vector3(-5.0, 5.0, -42.0), Vector3(20.0, 4.0, -40.0)
-	]
-	for position in mountain_positions:
-		var mountain := MeshInstance3D.new()
-		var cone := CylinderMesh.new()
-		cone.top_radius = 1.0
-		cone.bottom_radius = 12.0
-		cone.height = position.y * 2.0
-		cone.radial_segments = 12
-		mountain.mesh = cone
-		mountain.material_override = mountain_material
-		mountain.position = position
-		add_child(mountain)
-
-		var snow := MeshInstance3D.new()
-		var snow_cone := CylinderMesh.new()
-		snow_cone.top_radius = 0.7
-		snow_cone.bottom_radius = 4.8
-		snow_cone.height = position.y * 0.55
-		snow_cone.radial_segments = 12
-		snow.mesh = snow_cone
-		snow.material_override = snow_material
-		snow.position = position + Vector3.UP * (position.y * 0.72)
-		add_child(snow)
-
-func _build_track() -> void:
-	var track_material := _material(Color("#193659"), 0.28, 0.5)
-	var neon_material := _material(Color("#3fe9ff"), 0.15, 0.3, Color("#09c9ff") * 2.0)
-	_add_box("Arena", Vector3.ZERO, Vector3(32.0, 1.0, 32.0), track_material)
-	for i in range(-14, 15, 2):
-		_add_visual_box(Vector3(float(i), 0.52, 0.0), Vector3(0.035, 0.025, 31.0), neon_material)
-		_add_visual_box(Vector3(0.0, 0.52, float(i)), Vector3(31.0, 0.025, 0.035), neon_material)
-	_add_box("Bariera północ", Vector3(0.0, 1.5, -16.0), Vector3(32.0, 3.0, 0.8), track_material)
-	_add_box("Bariera południe", Vector3(0.0, 1.5, 16.0), Vector3(32.0, 3.0, 0.8), track_material)
-	_add_box("Bariera zachód", Vector3(-16.0, 1.5, 0.0), Vector3(0.8, 3.0, 32.0), track_material)
-	_add_box("Bariera wschód", Vector3(16.0, 1.5, 0.0), Vector3(0.8, 3.0, 32.0), track_material)
-	_add_box("Mega rampa A", Vector3(-9.0, 1.0, -7.0), Vector3(8.0, 1.0, 6.0), neon_material, Vector3(0.0, 0.0, -0.28))
-	_add_box("Mega rampa B", Vector3(9.0, 1.0, 7.0), Vector3(8.0, 1.0, 6.0), neon_material, Vector3(0.0, 0.0, 0.28))
-	var positions := [Vector3(-6, 0.8, -2), Vector3(6, 0.8, 2), Vector3(0, 0.8, 6), Vector3(-3, 0.8, 11), Vector3(10, 0.8, -9), Vector3(-10, 0.8, 8)]
-	for index in positions.size():
-		var center: Vector3 = positions[index]
-		var hue := float(index) / positions.size()
-		var color := Color.from_hsv(hue, 0.8, 1.0)
-		var bumper := StaticBody3D.new()
-		bumper.position = center
-		var mesh_instance := MeshInstance3D.new()
-		var cylinder := CylinderMesh.new()
-		cylinder.top_radius = 1.0
-		cylinder.bottom_radius = 1.12
-		cylinder.height = 1.6
-		mesh_instance.mesh = cylinder
-		mesh_instance.material_override = _material(color, 0.12, 0.55, color * 1.8)
-		bumper.add_child(mesh_instance)
-		var collider := CollisionShape3D.new()
-		var shape := CylinderShape3D.new()
-		shape.radius = 1.1
-		shape.height = 1.6
-		collider.shape = shape
-		bumper.add_child(collider)
-		add_child(bumper)
-		var area := Area3D.new()
-		area.position = center
-		var area_shape := SphereShape3D.new()
-		area_shape.radius = 1.55
-		var area_collider := CollisionShape3D.new()
-		area_collider.shape = area_shape
-		area.add_child(area_collider)
-		area.body_entered.connect(_on_bumper_touched.bind(center))
-		add_child(area)
+func _make_ground_material() -> ShaderMaterial:
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode specular_schlick_ggx;
+varying vec3 world_position;
+void vertex() {
+	world_position = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+float hash21(vec2 p) {
+	p = fract(p * vec2(123.34, 456.21));
+	p += dot(p, p + 45.32);
+	return fract(p.x * p.y);
+}
+void fragment() {
+	vec2 p = world_position.xz;
+	float macro_noise = hash21(floor(p * 0.16));
+	float fine_noise = hash21(floor(p * 2.8));
+	float blades = smoothstep(0.08, 0.92, hash21(floor(p * 14.0)));
+	vec3 soil = mix(vec3(0.035, 0.075, 0.045), vec3(0.12, 0.19, 0.075), macro_noise);
+	vec3 grass = mix(vec3(0.055, 0.16, 0.045), vec3(0.19, 0.31, 0.085), blades * 0.7 + fine_noise * 0.3);
+	float path = smoothstep(0.0, 0.025, abs(fract(p.x * 0.5) - 0.5)) * smoothstep(0.0, 0.025, abs(fract(p.y * 0.5) - 0.5));
+	ALBEDO = mix(soil, grass, 0.74 + path * 0.12);
+	ROUGHNESS = 0.94;
+}
+"""
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	return material
 
 func _build_ball() -> void:
 	ball = RigidBody3D.new()
-	ball.name = "MEGA_KULKA"
-	ball.position = Vector3(0.0, 4.0, 0.0)
-	ball.mass = 1.8
-	ball.linear_damp = 0.08
-	ball.angular_damp = 0.04
+	ball.name = "Kulka"
+	ball.position = Vector3(0.0, 5.0, 0.0)
+	ball.mass = 1.25
+	ball.linear_damp = 0.055
+	ball.angular_damp = 0.035
 	ball.continuous_cd = true
 	ball.contact_monitor = true
-	ball.max_contacts_reported = 12
-	ball.physics_material_override = PhysicsMaterial.new()
-	ball.physics_material_override.friction = 0.85
-	ball.physics_material_override.bounce = 0.55
-	var mesh_instance := MeshInstance3D.new()
+	ball.max_contacts_reported = 8
+	var physics_material := PhysicsMaterial.new()
+	physics_material.friction = 0.48
+	physics_material.bounce = 0.72
+	ball.physics_material_override = physics_material
+	ball.body_entered.connect(_on_ball_body_entered)
+
 	var sphere := SphereMesh.new()
 	sphere.radius = BALL_RADIUS
 	sphere.height = BALL_RADIUS * 2.0
-	mesh_instance.mesh = sphere
-	mesh_instance.material_override = _material(Color("#f8fcff"), 0.08, 0.72, Color("#38cfff") * 0.55)
-	ball.add_child(mesh_instance)
-	var collider := CollisionShape3D.new()
-	var shape := SphereShape3D.new()
-	shape.radius = BALL_RADIUS
-	collider.shape = shape
-	ball.add_child(collider)
+	sphere.radial_segments = 64
+	sphere.rings = 32
+	var mesh := MeshInstance3D.new()
+	mesh.name = "Błyszcząca kula"
+	mesh.mesh = sphere
+	var ball_material := StandardMaterial3D.new()
+	ball_material.albedo_color = Color("#d9f6ff")
+	ball_material.metallic = 0.62
+	ball_material.roughness = 0.12
+	ball_material.emission_enabled = true
+	ball_material.emission = Color("#049eff")
+	ball_material.emission_energy_multiplier = 0.65
+	mesh.material_override = ball_material
+	ball.add_child(mesh)
+
+	var collision := CollisionShape3D.new()
+	var sphere_shape := SphereShape3D.new()
+	sphere_shape.radius = BALL_RADIUS
+	collision.shape = sphere_shape
+	ball.add_child(collision)
 	add_child(ball)
 
 func _build_camera() -> void:
 	camera = Camera3D.new()
-	camera.position = Vector3(0.0, 12.0, 17.0)
-	camera.fov = 68.0
+	camera.name = "Bliska kamera"
+	camera.position = Vector3(0.0, 4.2, 8.2)
+	camera.fov = 48.0
 	camera.current = true
 	add_child(camera)
+	camera.look_at(ball.global_position, Vector3.UP)
+
+func _build_effects() -> void:
+	var trail := _make_particles(90, 0.65, Color("#38cfff"), 1.2, 2.5)
+	trail.name = "Świetlisty ślad"
+	trail.local_coords = false
+	trail.position = Vector3.ZERO
+	ball.add_child(trail)
+	trail.emitting = true
+
+	impact_particles = _make_particles(70, 0.8, Color("#a8f4ff"), 3.0, 9.0)
+	impact_particles.name = "Iskry uderzenia"
+	impact_particles.one_shot = true
+	impact_particles.emitting = false
+	add_child(impact_particles)
+
+func _make_particles(amount: int, lifetime: float, color: Color, velocity_min: float, velocity_max: float) -> GPUParticles3D:
+	var particles := GPUParticles3D.new()
+	particles.amount = amount
+	particles.lifetime = lifetime
+	particles.explosiveness = 0.0
+	var process_material := ParticleProcessMaterial.new()
+	process_material.direction = Vector3(0.0, 0.5, 0.0)
+	process_material.spread = 180.0
+	process_material.initial_velocity_min = velocity_min
+	process_material.initial_velocity_max = velocity_max
+	process_material.gravity = Vector3(0.0, -5.0, 0.0)
+	process_material.scale_min = 0.045
+	process_material.scale_max = 0.12
+	process_material.color = color
+	particles.process_material = process_material
+	var particle_mesh := SphereMesh.new()
+	particle_mesh.radius = 0.055
+	particle_mesh.height = 0.11
+	var particle_visual := MeshInstance3D.new()
+	particle_visual.mesh = particle_mesh
+	var particle_material := StandardMaterial3D.new()
+	particle_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	particle_material.albedo_color = color
+	particle_material.emission_enabled = true
+	particle_material.emission = color
+	particle_material.emission_energy_multiplier = 2.0
+	particle_visual.material_override = particle_material
+	particles.draw_pass_1 = particle_visual
+	particles.lifetime = lifetime
+	return particles
 
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
-	score_label = Label.new()
-	score_label.position = Vector2(24.0, 18.0)
-	score_label.add_theme_font_size_override("font_size", 30)
-	score_label.add_theme_color_override("font_color", Color.WHITE)
-	layer.add_child(score_label)
-	var controls := Label.new()
-	controls.position = Vector2(24.0, 68.0)
-	controls.text = "WASD — ruch  •  SPACJA — skok  •  SHIFT — boost  •  R — reset"
-	controls.add_theme_font_size_override("font_size", 17)
-	controls.add_theme_color_override("font_color", Color("#d1eaff"))
-	layer.add_child(controls)
-	message_label = Label.new()
-	message_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	message_label.position = Vector2(-350.0, 120.0)
-	message_label.size = Vector2(700.0, 50.0)
-	message_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	message_label.add_theme_font_size_override("font_size", 24)
-	message_label.add_theme_color_override("font_color", Color("#77efff"))
-	layer.add_child(message_label)
+	status_label = Label.new()
+	status_label.position = Vector2(26.0, 24.0)
+	status_label.add_theme_font_size_override("font_size", 20)
+	status_label.add_theme_color_override("font_color", Color("#e9f8ff"))
+	status_label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.8))
+	status_label.add_theme_constant_override("shadow_offset_x", 2)
+	status_label.add_theme_constant_override("shadow_offset_y", 2)
+	layer.add_child(status_label)
 
-func _add_box(label: String, position: Vector3, size: Vector3, material: Material, rotation: Vector3 = Vector3.ZERO) -> void:
-	var body := StaticBody3D.new()
-	body.name = label
-	body.position = position
-	body.rotation = rotation
-	var mesh_instance := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = size
-	mesh_instance.mesh = mesh
-	mesh_instance.material_override = material
-	body.add_child(mesh_instance)
-	var collider := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = size
-	collider.shape = shape
-	body.add_child(collider)
-	add_child(body)
-
-func _add_visual_box(position: Vector3, size: Vector3, material: Material) -> void:
-	var mesh_instance := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = size
-	mesh_instance.mesh = mesh
-	mesh_instance.position = position
-	mesh_instance.material_override = material
-	add_child(mesh_instance)
-
-func _add_visual_sphere(position: Vector3, size: float, material: Material) -> void:
-	var sphere_instance := MeshInstance3D.new()
-	var sphere := SphereMesh.new()
-	sphere.radius = size
-	sphere.height = size * 2.0
-	sphere_instance.mesh = sphere
-	sphere_instance.position = position
-	sphere_instance.material_override = material
-	add_child(sphere_instance)
-
-func _material(color: Color, roughness: float, metallic: float, emission: Color = Color.BLACK) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
-	material.roughness = roughness
-	material.metallic = metallic
-	if emission != Color.BLACK:
-		material.emission_enabled = true
-		material.emission = emission
-		material.emission_energy_multiplier = 2.0
-	return material
-
-func _on_bumper_touched(body: Node3D, center: Vector3) -> void:
-	if body != ball:
+func _on_ball_body_entered(_body: Node) -> void:
+	if Time.get_ticks_msec() / 1000.0 - last_impact_time < 0.12:
 		return
-	var direction := (ball.global_position - center).normalized()
-	ball.apply_central_impulse(direction * 14.0 + Vector3.UP * 5.0)
-	score += 1
-	_show_message("MEGA BUMPER!  +1")
+	last_impact_time = Time.get_ticks_msec() / 1000.0
+	impact_particles.global_position = ball.global_position
+	impact_particles.restart()
+	impact_particles.emitting = true
 
 func _reset_ball() -> void:
 	ball.linear_velocity = Vector3.ZERO
 	ball.angular_velocity = Vector3.ZERO
-	ball.global_position = Vector3(0.0, 4.0, 0.0)
-	_show_message("Powrót na start")
-
-func _show_message(text: String) -> void:
-	message_label.text = text
-	message_label.visible = true
-	message_time = 2.2
-
-func _update_hud() -> void:
-	var speed := Vector2(ball.linear_velocity.x, ball.linear_velocity.z).length()
-	var boost_text := "BOOST GOTOWY" if boost_cooldown == 0.0 else "BOOST: %.1f" % boost_cooldown
-	score_label.text = "PUNKTY: %03d   PRĘDKOŚĆ: %05.1f   %s" % [score, speed, boost_text]
+	ball.global_position = Vector3(0.0, 5.0, 0.0)
+	ball.sleeping = false
+	if impact_particles != null:
+		impact_particles.global_position = ball.global_position
+		impact_particles.restart()
+		impact_particles.emitting = true
