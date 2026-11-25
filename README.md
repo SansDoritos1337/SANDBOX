@@ -1,24 +1,13 @@
-# Kulka 3D — Fizyczny Plac Zabaw
+# Kulka 3D — Ultra Physics
 
-Mała, grywalna scena 3D w Godot 4: sterujesz **jedną fizyczną kulką** po neonowej arenie. Rozpędzaj ją, skacz, używaj dopalacza i odbijaj się od bumperów, żeby zdobywać punkty.
-
-## Uruchomienie
-
-1. Otwórz `project.godot` w Godot 4.3 lub nowszym.
-2. Naciśnij **F6/F5** albo przycisk Uruchom.
+Mocny, fizyczny plac zabaw z jedną kulką w Godot 4:
+- duża terenowa mapa z górami i tunelem ramp
+- Forward+, SSAO, Włókna HDR i kompletne cienie
+- cieniowalne bumpery i neonowe światła
+- mocniejsze fizyki, dopalacze i skoki
 
 ## Sterowanie
 
-- **WASD** lub **strzałki** — rozpędzanie kulki
-- **Spacja** — skok, gdy kulka dotyka podłoża
-- **Shift** — dopalacz z krótkim czasem odnowienia
-- **R** — powrót na środek areny
+**WASD / strzałki** — ruch  •  **Spacja** — skok  •  **Shift** — dopalacz  •  **R** — reset
 
-## Co jest w środku
-
-- RigidBody3D z tarciem, sprężystością i ciągłym wykrywaniem kolizji
-- siła przykładana przy spodzie kuli, dająca naturalne toczenie
-- rampy, barierki i neonowe bumpery z fizycznym odbiciem oraz punktacją
-- kamera podążająca za kulką i prosty HUD z prędkością
-
-Cała arena jest tworzona skryptem `scripts/game.gd`; nie potrzeba dodatkowych assetów ani pluginów.
+Otwórz `project.godot` w Godot 4.3+ i uruchom projekt.
