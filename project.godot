@@ -1,0 +1,26 @@
+; Engine configuration file.
+; Godot 4.x project settings.
+config_version=5
+
+[application]
+config/name="Kulka 3D — Fizyczny Plac Zabaw"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.3", "GL Compatibility")
+
+[display]
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/window_width_override=1280
+window/size/window_height_override=720
+window/stretch/mode="canvas_items"
+
+[physics]
+3d/default_gravity=18.0
+3d/default_gravity_vector=Vector3(0, -1, 0)
+3d/physics_engine="GodotPhysics3D"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/use_nearest_mipmap_filter=false
+environment/defaults/default_clear_color=Color(0.0352941, 0.0509804, 0.0901961, 1)
